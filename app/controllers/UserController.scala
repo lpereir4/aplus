@@ -14,7 +14,7 @@ import org.webjars.play.WebJarsUtil
 import play.api.data.Form
 import play.api.data.Forms._
 import play.api.data.validation.Constraints._
-import play.api.mvc.{Call, InjectedController}
+import play.api.mvc.{Action, AnyContent, Call, InjectedController}
 import services.{ApplicationService, EventService, NotificationService, UserGroupService, UserService}
 
 @Singleton
@@ -161,8 +161,8 @@ class UserController @Inject()(loginAction: LoginAction,
     )
   )
 
-  def editUser(userId: UUID) = loginAction { implicit request =>
-    if(request.currentUser.admin != true) {
+  def editUser(userId: UUID): Action[AnyContent] = loginAction { implicit request =>
+    if (!request.currentUser.admin) {
       eventService.warn("VIEW_USER_UNAUTHORIZED", s"Accès non autorisé pour voir $userId")
       Unauthorized("Vous n'avez pas le droit de faire ça")
     } else {
@@ -174,9 +174,34 @@ class UserController @Inject()(loginAction: LoginAction,
         case Some(user) =>
           val form = userForm.fill(user)
           val groups = userGroupService.allGroups
+          val unused = isUserUnused(user)
           eventService.info("USER_SHOWED", s"Visualise la vue de modification l'utilisateur ", user = Some(user))
-          Ok(views.html.editUser(request.currentUser, request.currentArea)(form, userId, groups))
+          Ok(views.html.editUser(request.currentUser, request.currentArea)(form, userId, groups, unused))
       }
+    }
+  }
+
+  def isUserUnused(user: User): Boolean = {
+    val applications = applicationService.allForUserId(userId = user.id, anonymous = false)
+    applications.isEmpty
+  }
+
+  def deleteById(userId: UUID): Action[AnyContent] = loginAction { implicit request =>
+    asAdmin { () =>
+      userService.deleteById(userId)
+      Redirect(url = "/users", status = 200, queryString = Map.empty[String, Seq[String]])
+    } { () =>
+      "DELETE_USER_UNAUTHORIZED" -> s"Suppression de l'utilisateur $userId refusée."
+    }
+  }
+
+  def asAdmin(payload: () => play.api.mvc.Result)(event: () => (String, String))(implicit request: RequestWithUserData[AnyContent]): play.api.mvc.Result = {
+    if(request.currentUser.admin) {
+      payload()
+    } else {
+      val (code, description) = event()
+      eventService.warn(code, description = description)(request)
+      Unauthorized("Vous n'avez pas le droit de faire ça")
     }
   }
 
